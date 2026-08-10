@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 
 from scanner.network import scan_host
-from scanner.data import scan_directory
+from scanner.scan import scan_directory
 from scanner.risk import score
 from scanner.report import generate_csv, report_header
 
