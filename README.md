@@ -1,31 +1,48 @@
-NetGuard Security Scanner
-Defensive network and data security assessment package.
+# 🛡️ NetGuard Security Scanner
 
-# NetGuard
+NetGuard is a defensive security assessment application for identifying
+common network exposure and data-security weaknesses.
 
-NetGuard is a small defensive network and data security assessment toolkit. It provides:
+## Features
 
-- A TCP port scanner for quick assessment of open services (scanner.network.scan_host).
-- A file system scanner that checks for world-readable/writable files and common secret patterns (scanner.scan.scan_directory).
-- A risk scoring utility (scanner.risk.score) and report generation helpers (scanner.report.generate_csv, scanner.report.report_header).
+- TCP network service assessment
+- Risk classification
+- Security recommendations
+- Detection of potentially exposed secrets
+- File-permission assessment on Unix/Linux
+- Security dashboard
+- CSV report generation
+- Text report generation
 
-## Quick start
+## Installation
 
-1. Create a virtual environment and install dependencies:
+### Windows
+
+```bash
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+streamlit run app.py
+```
+
+### Linux / macOS
 
 ```bash
 python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
+source venv/bin/activate
 pip install -r requirements.txt
+streamlit run streamlit_app.py
 ```
 
-2. Run the Streamlit UI:
+## Quick start
+
+Run the Streamlit UI (after activating your venv):
 
 ```bash
 streamlit run streamlit_app.py
 ```
 
-3. Run the CLI scanner (example):
+Run the CLI scanner (example):
 
 ```bash
 python -c "from scanner.scan import scan_directory; print(scan_directory('.', max_files=100))"
