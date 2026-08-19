@@ -7,11 +7,11 @@ or are explicitly authorized to assess.
 
 from __future__ import annotations
 
+import ipaddress
 import socket
 from typing import Any
 
 
-# Common services.
 COMMON_SERVICES = {
     20: "FTP Data",
     21: "FTP",
@@ -21,8 +21,8 @@ COMMON_SERVICES = {
     53: "DNS",
     80: "HTTP",
     110: "POP3",
-    143: "IMAP",
     139: "NetBIOS",
+    143: "IMAP",
     443: "HTTPS",
     445: "SMB",
     3306: "MySQL",
@@ -32,7 +32,6 @@ COMMON_SERVICES = {
 }
 
 
-# Exposure guidance.
 SERVICE_RISK = {
     21: ("Medium", "FTP may transmit credentials insecurely."),
     22: ("Medium", "SSH is exposed; ensure strong authentication."),
@@ -58,17 +57,55 @@ def validate_target(target: str) -> str:
     if len(target) > 253:
         raise ValueError("Target name is too long.")
 
-    # Remove accidental URL schemes.
     if "://" in target:
         raise ValueError(
             "Enter a hostname or IP address, not a URL."
         )
 
-    return target
+    # Reject whitespace inside the target.
+    if any(character.isspace() for character in target):
+        raise ValueError(
+            "Target cannot contain spaces."
+        )
+
+    # Validate IP addresses when the target is an IP.
+    try:
+        ipaddress.ip_address(target)
+        return target
+    except ValueError:
+        pass
+
+    # Basic hostname validation.
+    hostname = target.rstrip(".")
+
+    if not hostname:
+        raise ValueError("Invalid target.")
+
+    labels = hostname.split(".")
+
+    for label in labels:
+        if (
+            not label
+            or len(label) > 63
+            or label.startswith("-")
+            or label.endswith("-")
+            or not all(
+                character.isalnum() or character == "-"
+                for character in label
+            )
+        ):
+            raise ValueError(
+                "Invalid hostname."
+            )
+
+    return hostname
 
 
 def validate_ports(ports: list[int]) -> list[int]:
     """Validate a list of TCP ports."""
+
+    if not isinstance(ports, list):
+        raise ValueError("Ports must be provided as a list.")
 
     if not ports:
         raise ValueError("At least one port is required.")
@@ -88,7 +125,6 @@ def validate_ports(ports: list[int]) -> list[int]:
 
         validated.append(port)
 
-    # Remove duplicates while preserving order.
     return list(dict.fromkeys(validated))
 
 
@@ -97,11 +133,15 @@ def validate_timeout(timeout: float) -> float:
 
     try:
         timeout = float(timeout)
-    except (TypeError, ValueError):
-        raise ValueError("Timeout must be a number.")
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "Timeout must be a number."
+        ) from exc
 
     if timeout <= 0:
-        raise ValueError("Timeout must be greater than zero.")
+        raise ValueError(
+            "Timeout must be greater than zero."
+        )
 
     if timeout > 10:
         raise ValueError(
@@ -112,7 +152,9 @@ def validate_timeout(timeout: float) -> float:
 
 
 def resolve_target(target: str) -> str:
-    """Resolve a hostname to an IP address."""
+    """Resolve a hostname to an IPv4 address."""
+
+    target = validate_target(target)
 
     try:
         return socket.gethostbyname(target)
@@ -130,8 +172,7 @@ def assess_port(
     """
     Assess one TCP port.
 
-    This checks whether a TCP connection is accepted.
-    An open port alone does NOT prove that a vulnerability exists.
+    An open port does not by itself prove a vulnerability.
     """
 
     target = validate_target(target)
@@ -163,11 +204,7 @@ def assess_port(
     except ConnectionRefusedError:
         return result
 
-    except TimeoutError:
-        result["status"] = "timeout"
-        return result
-
-    except socket.timeout:
+    except (TimeoutError, socket.timeout):
         result["status"] = "timeout"
         return result
 
@@ -176,29 +213,32 @@ def assess_port(
         result["error"] = str(exc)
         return result
 
-    # The port accepted a connection.
-    # Apply exposure guidance, not a claim of vulnerability.
     risk, explanation = SERVICE_RISK.get(
         port,
-        ("Low", "An accessible TCP service increases attack surface."),
+        (
+            "Low",
+            "An accessible TCP service increases "
+            "network attack surface.",
+        ),
     )
 
     result["risk"] = risk
+
     result["finding"] = (
-        f"{service} is accepting TCP connections on port {port}. "
-        f"{explanation}"
+        f"{service} is accepting TCP connections "
+        f"on port {port}. {explanation}"
     )
 
     if port in SERVICE_RISK:
         result["action"] = (
-            "Confirm the service is required. "
-            "Restrict access to trusted networks where possible "
-            "and keep the service securely configured."
+            "Confirm that the service is required. "
+            "Restrict access to trusted networks where "
+            "possible and keep the service securely configured."
         )
     else:
         result["action"] = (
-            "Confirm the service is required and restrict "
-            "unnecessary network exposure."
+            "Confirm that the service is required and "
+            "restrict unnecessary network exposure."
         )
 
     return result
@@ -212,15 +252,13 @@ def scan_host(
     """
     Assess selected TCP ports on an authorized target.
 
-    Returns only ports that are open or produced a meaningful
-    assessment result.
+    Only meaningful results are returned.
     """
 
     target = validate_target(target)
     ports = validate_ports(ports)
     timeout = validate_timeout(timeout)
 
-    # Resolve once before starting the assessment.
     resolve_target(target)
 
     findings = []
