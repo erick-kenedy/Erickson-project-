@@ -7,21 +7,319 @@ from scanner.risk import score
 from scanner.report import generate_csv, report_header
 
 
+# ---------------------------------------------------------
+# PAGE CONFIGURATION
+# ---------------------------------------------------------
+
 st.set_page_config(
-    page_title="NetGuard",
+    page_title="NetGuard Security",
     page_icon="🛡️",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded",
 )
 
+
+# ---------------------------------------------------------
+# SESSION STATE
+# ---------------------------------------------------------
+
+DEFAULT_STATE = {
+    "network_findings": [],
+    "data_findings": [],
+    "network_target": "",
+    "data_directory": "",
+}
+
+for key, value in DEFAULT_STATE.items():
+    if key not in st.session_state:
+        st.session_state[key] = value
+
+
+# ---------------------------------------------------------
+# HELPERS
+# ---------------------------------------------------------
+
+def parse_ports(ports_text: str) -> list[int]:
+    """Convert comma-separated port input into validated ports."""
+
+    if not ports_text.strip():
+        raise ValueError("Enter at least one TCP port.")
+
+    ports = []
+
+    for item in ports_text.split(","):
+        item = item.strip()
+
+        if not item:
+            continue
+
+        try:
+            port = int(item)
+        except ValueError:
+            raise ValueError(
+                f"Invalid port: '{item}'. Ports must be numbers."
+            )
+
+        if not 1 <= port <= 65535:
+            raise ValueError(
+                f"Port {port} is outside the valid range 1-65535."
+            )
+
+        ports.append(port)
+
+    if not ports:
+        raise ValueError("Enter at least one valid TCP port.")
+
+    # Remove duplicates while preserving order.
+    return list(dict.fromkeys(ports))
+
+
+def get_all_findings() -> list[dict]:
+    """Return all findings currently stored in the session."""
+
+    return (
+        st.session_state.network_findings
+        + st.session_state.data_findings
+    )
+
+
+def finding_type(finding: dict) -> str:
+    """Return a readable finding type."""
+
+    return (
+        finding.get("type")
+        or finding.get("service")
+        or "Network finding"
+    )
+
+
+def finding_location(finding: dict) -> str:
+    """Return a readable finding location."""
+
+    if finding.get("path"):
+        return str(finding["path"])
+
+    if finding.get("port") is not None:
+        return f"Port {finding['port']}"
+
+    return "Unknown"
+
+
+def render_finding(finding: dict) -> None:
+    """Display one security finding."""
+
+    risk = finding.get("risk", "Info")
+    title = finding_type(finding)
+
+    with st.container(border=True):
+        st.subheader(title)
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.write(f"**Risk:** {risk}")
+
+        with col2:
+            st.write(
+                f"**Location:** {finding_location(finding)}"
+            )
+
+        if finding.get("finding"):
+            st.write(
+                f"**Finding:** {finding['finding']}"
+            )
+
+        if finding.get("action"):
+            st.info(
+                f"**Recommended action:** "
+                f"{finding['action']}"
+            )
+
+
+def render_metrics(findings: list[dict]) -> None:
+    """Display common security metrics."""
+
+    total, level = score(findings)
+
+    critical = sum(
+        1 for finding in findings
+        if finding.get("risk") == "Critical"
+    )
+
+    high = sum(
+        1 for finding in findings
+        if finding.get("risk") == "High"
+    )
+
+    c1, c2, c3, c4 = st.columns(4)
+
+    c1.metric(
+        "Total findings",
+        len(findings),
+    )
+
+    c2.metric(
+        "Risk score",
+        total,
+    )
+
+    c3.metric(
+        "Overall risk",
+        level,
+    )
+
+    c4.metric(
+        "High / Critical",
+        critical + high,
+    )
+
+
+def build_dataframe(findings: list[dict]) -> pd.DataFrame:
+    """Convert findings into a dashboard table."""
+
+    rows = []
+
+    for finding in findings:
+        rows.append(
+            {
+                "Risk": finding.get("risk", "Info"),
+                "Type": finding_type(finding),
+                "Location": finding_location(finding),
+                "Finding": finding.get("finding", ""),
+                "Recommendation": finding.get(
+                    "action",
+                    "",
+                ),
+            }
+        )
+
+    return pd.DataFrame(rows)
+
+
+def render_reports(findings: list[dict]) -> None:
+    """Render report download buttons."""
+
+    if not findings:
+        return
+
+    st.subheader("Reports")
+
+    csv_data = generate_csv(findings)
+
+    text_report = (
+        report_header("NetGuard Security Assessment")
+        + "\n"
+        + "\n".join(
+            [
+                (
+                    f"{finding.get('risk', 'Info')} | "
+                    f"{finding_type(finding)} | "
+                    f"{finding.get('finding', '')} | "
+                    f"Action: {finding.get('action', '')}"
+                )
+                for finding in findings
+            ]
+        )
+    )
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.download_button(
+            label="⬇️ Download CSV",
+            data=csv_data,
+            file_name="netguard-security-report.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+
+    with col2:
+        st.download_button(
+            label="⬇️ Download Text Report",
+            data=text_report,
+            file_name="netguard-security-report.txt",
+            mime="text/plain",
+            use_container_width=True,
+        )
+
+
+# ---------------------------------------------------------
+# HEADER
+# ---------------------------------------------------------
 
 st.title("🛡️ NetGuard")
-st.subheader("Network & Data Security Assessment Platform")
 
-st.warning(
-    "Use this application only on systems, networks and data "
-    "that you own or are explicitly authorized to assess."
+st.markdown(
+    """
+    ### Network & Data Security Assessment Platform
+
+    Assess systems and files that you own or are explicitly
+    authorized to test.
+    """
 )
 
+st.warning(
+    "⚠️ Authorization required: only assess systems, "
+    "networks, and data that you own or have permission to assess."
+)
+
+
+# ---------------------------------------------------------
+# SIDEBAR
+# ---------------------------------------------------------
+
+with st.sidebar:
+    st.header("🛡️ NetGuard")
+
+    st.caption("Security Assessment Platform")
+
+    st.divider()
+
+    st.subheader("Current Session")
+
+    all_findings = get_all_findings()
+
+    st.metric(
+        "Findings",
+        len(all_findings),
+    )
+
+    total, level = score(all_findings)
+
+    st.metric(
+        "Risk Score",
+        total,
+    )
+
+    st.metric(
+        "Risk Level",
+        level,
+    )
+
+    st.divider()
+
+    if st.button(
+        "🗑️ Clear Assessment",
+        use_container_width=True,
+    ):
+        st.session_state.network_findings = []
+        st.session_state.data_findings = []
+        st.session_state.network_target = ""
+        st.session_state.data_directory = ""
+
+        st.rerun()
+
+    st.divider()
+
+    st.caption(
+        "NetGuard v1.1\n"
+        "Defensive security assessment tool"
+    )
+
+
+# ---------------------------------------------------------
+# MAIN NAVIGATION
+# ---------------------------------------------------------
 
 network_tab, data_tab, dashboard_tab = st.tabs(
     [
@@ -32,76 +330,75 @@ network_tab, data_tab, dashboard_tab = st.tabs(
 )
 
 
-if "network_findings" not in st.session_state:
-    st.session_state.network_findings = []
-
-if "data_findings" not in st.session_state:
-    st.session_state.data_findings = []
-
-
-# ---------------------------------------------------------
+# =========================================================
 # NETWORK SCANNER
-# ---------------------------------------------------------
+# =========================================================
 
 with network_tab:
 
-    st.header("Network Vulnerability Assessment")
+    st.header("🌐 Network Security Assessment")
 
-    target = st.text_input(
-        "Target hostname or IP address",
-        value="127.0.0.1"
+    st.write(
+        "Check selected TCP ports on an authorized "
+        "hostname or IP address."
     )
 
-    ports_text = st.text_input(
-        "TCP ports",
-        value=(
-            "21,22,23,25,53,80,110,139,"
-            "143,443,445,3306,3389,5432,8080"
+    with st.form("network_scan_form"):
+
+        target = st.text_input(
+            "Target hostname or IP address",
+            value=st.session_state.network_target
+            or "127.0.0.1",
+            help=(
+                "Use a hostname or IP address belonging "
+                "to a system you are authorized to assess."
+            ),
         )
-    )
 
-    timeout = st.slider(
-        "Connection timeout",
-        min_value=0.1,
-        max_value=3.0,
-        value=0.5,
-        step=0.1
-    )
+        ports_text = st.text_input(
+            "TCP ports",
+            value=(
+                "21,22,23,25,53,80,110,139,"
+                "143,443,445,3306,3389,5432,8080"
+            ),
+            help="Enter ports separated by commas.",
+        )
 
-    if st.button(
-        "🔎 Start Network Assessment",
-        type="primary"
-    ):
+        timeout = st.slider(
+            "Connection timeout",
+            min_value=0.1,
+            max_value=3.0,
+            value=0.5,
+            step=0.1,
+        )
+
+        network_submit = st.form_submit_button(
+            "🔎 Start Network Assessment",
+            type="primary",
+            use_container_width=True,
+        )
+
+    if network_submit:
 
         try:
-
-            ports = [
-                int(port.strip())
-                for port in ports_text.split(",")
-                if port.strip()
-            ]
-
-            if not ports:
+            if not target.strip():
                 raise ValueError(
-                    "Enter at least one port."
+                    "Enter a hostname or IP address."
                 )
 
-            if any(
-                port < 1 or port > 65535
-                for port in ports
-            ):
-                raise ValueError(
-                    "Ports must be between 1 and 65535."
-                )
+            ports = parse_ports(ports_text)
+
+            st.session_state.network_target = (
+                target.strip()
+            )
 
             with st.spinner(
-                "Assessing network connection..."
+                "Assessing selected TCP ports..."
             ):
-
                 findings = scan_host(
-                    target,
+                    target.strip(),
                     ports,
-                    timeout
+                    timeout,
                 )
 
             st.session_state.network_findings = findings
@@ -109,90 +406,98 @@ with network_tab:
             total, level = score(findings)
 
             st.success(
-                f"Assessment complete — Risk: {level}"
+                f"Assessment complete — Overall risk: {level}"
             )
 
-            col1, col2, col3 = st.columns(3)
+            render_metrics(findings)
 
-            col1.metric(
-                "Open services",
-                len(findings)
-            )
-
-            col2.metric(
-                "Risk score",
-                total
-            )
-
-            col3.metric(
-                "Overall risk",
-                level
-            )
+            st.divider()
 
             if not findings:
-
                 st.success(
-                    "No selected TCP ports accepted connections."
+                    "No selected TCP ports accepted "
+                    "connections."
+                )
+            else:
+                st.subheader(
+                    f"Findings ({len(findings)})"
                 )
 
-            for finding in findings:
+                for finding in findings:
+                    render_finding(finding)
 
-                with st.container():
+        except ValueError as error:
+            st.error(str(error))
 
-                    st.markdown(
-                        f"### Port {finding['port']} — "
-                        f"{finding['service']}"
-                    )
+        except Exception as error:
+            st.error(
+                "The network assessment could not be completed."
+            )
 
-                    st.write(
-                        f"**Risk:** {finding['risk']}"
-                    )
-
-                    st.write(
-                        f"**Finding:** {finding['finding']}"
-                    )
-
-                    st.info(
-                        f"Recommended action: "
-                        f"{finding['action']}"
-                    )
+            st.caption(
+                f"Technical detail: {error}"
+            )
 
 
-# ---------------------------------------------------------
+# =========================================================
 # DATA SCANNER
-# ---------------------------------------------------------
+# =========================================================
 
 with data_tab:
 
-    st.header("Data Security Assessment")
+    st.header("🔐 Data Security Assessment")
 
-    directory = st.text_input(
-        "Directory to assess",
-        value="."
+    st.write(
+        "Check an authorized local directory for "
+        "potentially sensitive files or security findings."
     )
 
-    max_files = st.number_input(
-        "Maximum files",
-        min_value=10,
-        max_value=10000,
-        value=1000,
-        step=100
-    )
+    with st.form("data_scan_form"):
 
-    if st.button(
-        "🔎 Start Data Assessment",
-        type="primary"
-    ):
+        directory = st.text_input(
+            "Directory to assess",
+            value=(
+                st.session_state.data_directory
+                or "."
+            ),
+            help=(
+                "Use a directory that you own or "
+                "are authorized to assess."
+            ),
+        )
+
+        max_files = st.number_input(
+            "Maximum files",
+            min_value=10,
+            max_value=10000,
+            value=1000,
+            step=100,
+        )
+
+        data_submit = st.form_submit_button(
+            "🔎 Start Data Assessment",
+            type="primary",
+            use_container_width=True,
+        )
+
+    if data_submit:
 
         try:
+            if not directory.strip():
+                raise ValueError(
+                    "Enter a directory to assess."
+                )
+
+            st.session_state.data_directory = (
+                directory.strip()
+            )
 
             with st.spinner(
-                "Checking files..."
+                "Checking authorized files..."
             ):
-
                 findings = scan_directory(
-                    directory,
-                    int(max_files)
+                    directory.strip(),
+                    int(max_files),
                 )
 
             st.session_state.data_findings = findings
@@ -200,157 +505,128 @@ with data_tab:
             total, level = score(findings)
 
             st.success(
-                f"Assessment complete — Risk: {level}"
+                f"Assessment complete — Overall risk: {level}"
             )
 
-            col1, col2 = st.columns(2)
+            render_metrics(findings)
 
-            col1.metric(
-                "Findings",
-                len(findings)
-            )
+            st.divider()
 
-            col2.metric(
-                "Risk score",
-                total
-            )
+            if not findings:
+                st.success(
+                    "No security findings were detected."
+                )
+            else:
+                st.subheader(
+                    f"Findings ({len(findings)})"
+                )
 
-            for finding in findings:
+                for finding in findings:
+                    render_finding(finding)
 
-                with st.container():
-
-                    st.markdown(
-                        f"### {finding['type']}"
-                    )
-
-                    st.write(
-                        f"**Risk:** {finding['risk']}"
-                    )
-
-                    st.code(
-                        finding["path"]
-                    )
-
-                    st.write(
-                        finding["finding"]
-                    )
-
-                    st.info(
-                        f"Recommended action: "
-                        f"{finding['action']}"
-                    )
+        except ValueError as error:
+            st.error(str(error))
 
         except Exception as error:
-
             st.error(
-                f"Assessment failed: {error}"
+                "The data assessment could not be completed."
+            )
+
+            st.caption(
+                f"Technical detail: {error}"
             )
 
 
-# ---------------------------------------------------------
-# DASHBOARD
-# ---------------------------------------------------------
+# =========================================================
+# SECURITY DASHBOARD
+# =========================================================
 
 with dashboard_tab:
 
-    st.header("Security Dashboard")
+    st.header("📊 Security Dashboard")
 
-    all_findings = (
-        st.session_state.network_findings
-        + st.session_state.data_findings
-    )
+    all_findings = get_all_findings()
 
-    total, level = score(all_findings)
+    if not all_findings:
 
-    c1, c2, c3 = st.columns(3)
-
-    c1.metric(
-        "Total findings",
-        len(all_findings)
-    )
-
-    c2.metric(
-        "Risk score",
-        total
-    )
-
-    c3.metric(
-        "Overall risk",
-        level
-    )
-
-    if all_findings:
-
-        rows = []
-
-        for finding in all_findings:
-
-            rows.append({
-                "Risk": finding.get("risk", "Info"),
-                "Type": (
-                    finding.get("type")
-                    or finding.get("service")
-                    or "Network finding"
-                ),
-                "Location": (
-                    finding.get("path")
-                    or f"Port {finding.get('port', '')}"
-                ),
-                "Recommendation": finding.get(
-                    "action",
-                    ""
-                )
-            })
-
-        dataframe = pd.DataFrame(rows)
-
-        st.dataframe(
-            dataframe,
-            use_container_width=True,
-            hide_index=True
+        st.info(
+            "No assessment results are loaded yet. "
+            "Run a Network or Data Assessment first."
         )
 
-        csv_data = generate_csv(
-            all_findings
-        )
+        st.markdown(
+            """
+            **Getting started**
 
-        st.download_button(
-            "⬇️ Export CSV Report",
-            csv_data,
-            "netguard-security-report.csv",
-            "text/csv"
-        )
-
-        text_report = (
-            report_header("Current assessment")
-            + "\n".join(
-                [
-                    f"{f.get('risk')} | "
-                    f"{f.get('type') or f.get('service')} | "
-                    f"{f.get('finding')} | "
-                    f"Action: {f.get('action')}"
-                    for f in all_findings
-                ]
-            )
-        )
-
-        st.download_button(
-            "⬇️ Export Text Report",
-            text_report,
-            "netguard-security-report.txt",
-            "text/plain"
+            1. Open **Network Scanner** or **Data Scanner**.
+            2. Enter an authorized target.
+            3. Start the assessment.
+            4. Return here to review the combined results.
+            """
         )
 
     else:
 
-        st.success(
-            "No assessment findings are currently loaded."
+        render_metrics(all_findings)
+
+        st.divider()
+
+        # -------------------------------------------------
+        # Risk summary
+        # -------------------------------------------------
+
+        st.subheader("Risk Summary")
+
+        risk_counts = (
+            pd.Series(
+                [
+                    finding.get("risk", "Info")
+                    for finding in all_findings
+                ]
+            )
+            .value_counts()
+            .rename_axis("Risk")
+            .reset_index(name="Count")
         )
 
+        if not risk_counts.empty:
+            st.bar_chart(
+                risk_counts.set_index("Risk")
+            )
+
+        # -------------------------------------------------
+        # Findings table
+        # -------------------------------------------------
+
+        st.subheader("All Findings")
+
+        dataframe = build_dataframe(
+            all_findings
+        )
+
+        st.dataframe(
+            dataframe,
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        # -------------------------------------------------
+        # Reports
+        # -------------------------------------------------
+
+        st.divider()
+
+        render_reports(all_findings)
+
+
+# ---------------------------------------------------------
+# FOOTER
+# ---------------------------------------------------------
 
 st.divider()
 
 st.caption(
-    "NetGuard v1.0 — Defensive security assessment tool. "
-    "Use only with authorization."
+    "NetGuard v1.1 — Defensive security assessment tool. "
+    "Use only on systems, networks, and data you are "
+    "authorized to assess."
 )
