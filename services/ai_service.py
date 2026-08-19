@@ -15,21 +15,22 @@ from typing import Any
 import requests
 
 
-AI_API_URL = os.getenv(
-    "AI_API_URL",
-    "",
-)
-
-AI_API_KEY = os.getenv(
-    "AI_API_KEY",
-    "",
-)
+def get_ai_config() -> tuple[str, str]:
+    """Read AI configuration from the environment."""
+    return (
+        os.getenv("AI_API_URL", "").strip(),
+        os.getenv("AI_API_KEY", "").strip(),
+    )
 
 
 def build_security_summary(
     findings: list[dict[str, Any]],
 ) -> str:
-    """Create a safe summary for an AI model."""
+    """
+    Create a limited, safe summary for an AI model.
+
+    Secret values are not included.
+    """
 
     if not findings:
         return (
@@ -38,28 +39,36 @@ def build_security_summary(
             "requiring immediate attention."
         )
 
-    lines = []
+    safe_findings = []
 
-    for finding in findings:
-        lines.append(
+    for finding in findings[:50]:
+        safe_findings.append(
             {
-                "risk": finding.get("risk", "Info"),
-                "type": finding.get(
-                    "type",
-                    "Security finding",
+                "risk": str(
+                    finding.get("risk", "Info")
                 ),
-                "location": finding.get(
-                    "location",
-                    finding.get("path", ""),
+                "type": str(
+                    finding.get(
+                        "type",
+                        "Security finding",
+                    )
                 ),
-                "finding": finding.get(
-                    "finding",
-                    "",
-                ),
+                "location": str(
+                    finding.get(
+                        "location",
+                        finding.get("path", ""),
+                    )
+                )[:300],
+                "finding": str(
+                    finding.get(
+                        "finding",
+                        "",
+                    )
+                )[:500],
             }
         )
 
-    return str(lines)
+    return str(safe_findings)
 
 
 def ask_ai(
@@ -68,35 +77,44 @@ def ask_ai(
     """
     Ask the configured AI provider to explain findings.
 
-    If AI is not configured, return a useful local message.
+    If AI is not configured or unavailable, return a
+    useful local message instead of crashing the application.
     """
 
-    if not AI_API_URL or not AI_API_KEY:
+    api_url, api_key = get_ai_config()
+
+    if not api_url or not api_key:
         return (
             "AI assistance is not configured yet. "
             "Your security findings are still available "
             "through the NetGuard dashboard."
         )
 
+    summary = build_security_summary(findings)
+
     prompt = f"""
-You are assisting with a defensive security assessment.
+You are NetGuard's defensive security assistant.
 
-Explain the following findings in clear, simple language.
+Analyze these authorized security assessment findings.
 
-Focus on:
-1. What the finding means.
-2. Why it may matter.
-3. Safe defensive remediation.
-4. Which findings should be prioritized.
+For each important finding:
+1. Explain what it means in simple language.
+2. Explain why it matters.
+3. Give safe defensive remediation.
+4. Identify the priority: Critical, High, Medium, Low, or Info.
 
-Do not provide instructions for attacking systems.
+Do not provide instructions for attacking systems,
+bypassing security controls, stealing credentials,
+or gaining unauthorized access.
+
+Keep the response concise and practical.
 
 Findings:
-{build_security_summary(findings)}
+{summary}
 """
 
     headers = {
-        "Authorization": f"Bearer {AI_API_KEY}",
+        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
 
@@ -107,7 +125,7 @@ Findings:
 
     try:
         response = requests.post(
-            AI_API_URL,
+            api_url,
             headers=headers,
             json=payload,
             timeout=30,
@@ -117,35 +135,36 @@ Findings:
 
         data = response.json()
 
-        # Provider response formats differ, so keep this
-        # deliberately conservative.
-        if isinstance(data, dict):
+        if not isinstance(data, dict):
+            return (
+                "The AI provider returned an invalid response."
+            )
 
-            if isinstance(
-                data.get("text"),
-                str,
-            ):
-                return data["text"]
+        for key in ("text", "response", "content"):
+            value = data.get(key)
 
-            if isinstance(
-                data.get("response"),
-                str,
-            ):
-                return data["response"]
-
-            if isinstance(
-                data.get("content"),
-                str,
-            ):
-                return data["content"]
+            if isinstance(value, str) and value.strip():
+                return value.strip()
 
         return (
             "The AI provider returned a response in an "
             "unsupported format."
         )
 
+    except requests.Timeout:
+        return (
+            "The AI service timed out. "
+            "Your scan results remain available."
+        )
+
     except requests.RequestException:
         return (
             "The AI service could not be reached. "
-            "Your scan results remain available locally."
+            "Your scan results remain available."
+        )
+
+    except ValueError:
+        return (
+            "The AI provider returned invalid JSON. "
+            "Your scan results remain available."
         )
