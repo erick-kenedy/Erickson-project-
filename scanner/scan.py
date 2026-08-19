@@ -1,176 +1,188 @@
+"""
+NetGuard local data security scanner.
+
+Scans authorized local files for potentially sensitive
+information without exposing the detected secret itself.
+"""
+
+from __future__ import annotations
+
 import os
 import re
-import stat
+from pathlib import Path
+from typing import Any
 
 
+# Directories that normally should not be scanned.
+DEFAULT_EXCLUDED_DIRS = {
+    ".git",
+    ".hg",
+    ".svn",
+    "__pycache__",
+    ".venv",
+    "venv",
+    "env",
+    "node_modules",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+}
+
+
+# File extensions that are reasonable for text inspection.
 TEXT_EXTENSIONS = {
     ".txt",
-    ".env",
-    ".ini",
-    ".cfg",
-    ".conf",
-    ".json",
-    ".yaml",
-    ".yml",
-    ".xml",
     ".py",
     ".js",
     ".ts",
+    ".jsx",
+    ".tsx",
     ".java",
     ".c",
     ".cpp",
     ".h",
+    ".hpp",
+    ".go",
+    ".rs",
     ".php",
-    ".html",
-    ".css",
+    ".rb",
+    ".swift",
+    ".kt",
+    ".kts",
+    ".json",
+    ".xml",
+    ".yaml",
+    ".yml",
+    ".toml",
+    ".ini",
+    ".cfg",
+    ".conf",
+    ".env",
     ".sql",
     ".sh",
-    ".bat",
-    ".ps1",
-    ".properties",
+    ".bash",
+    ".zsh",
+    ".html",
+    ".css",
+    ".md",
 }
 
 
+# Patterns identify possible secrets.
+# The actual matched value is NEVER returned to the UI.
 SECRET_PATTERNS = [
     (
         "Possible API key",
         re.compile(
-            r'''(?i)\b(api[_-]?key)\s*[:=]\s*['\"][A-Za-z0-9_\-]{12,}['\"]'''
-        ),
-    ),
-    (
-        "Possible private key",
-        re.compile(
-            r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"
+            r"(?i)\b(api[_-]?key|apikey)\s*[:=]\s*['\"]?[A-Za-z0-9_\-]{16,}"
         ),
     ),
     (
         "Possible password",
         re.compile(
-            r'''(?i)\b(password|passwd|pwd)\s*[:=]\s*['\"][^'\"]{4,}['\"]'''
+            r"(?i)\b(password|passwd|pwd)\s*[:=]\s*['\"]?[^'\"\s]{6,}"
         ),
     ),
     (
         "Possible secret key",
         re.compile(
-            r'''(?i)\b(secret[_-]?key|access[_-]?key)\s*[:=]\s*['\"][A-Za-z0-9_\-/+=]{12,}['\"]'''
+            r"(?i)\b(secret[_-]?key|secret)\s*[:=]\s*['\"]?[A-Za-z0-9_\-]{12,}"
+        ),
+    ),
+    (
+        "Possible private key",
+        re.compile(
+            r"-----BEGIN [A-Z ]*PRIVATE KEY-----"
         ),
     ),
 ]
 
 
-def check_permissions(path):
-    findings = []
+def validate_directory(directory: str) -> Path:
+    """Validate the directory supplied by the user."""
 
-    if os.name == "nt":
-        return findings
+    if not isinstance(directory, str):
+        raise ValueError("Directory must be text.")
 
-    try:
-        mode = os.stat(path).st_mode
+    directory = directory.strip()
 
-        if mode & stat.S_IROTH:
-            findings.append({
-                "path": path,
-                "type": "World-readable file",
-                "risk": "Medium",
-                "finding": "The file is readable by other local users.",
-                "action": "Restrict file permissions to the users or services that require access."
-            })
+    if not directory:
+        raise ValueError("Directory cannot be empty.")
 
-        if mode & stat.S_IWOTH:
-            findings.append({
-                "path": path,
-                "type": "World-writable file",
-                "risk": "High",
-                "finding": "Other local users can modify this file.",
-                "action": "Remove unnecessary write permissions and review ownership."
-            })
+    path = Path(directory).expanduser()
 
-    except OSError:
-        pass
+    if not path.exists():
+        raise ValueError(
+            f"Directory does not exist: {directory}"
+        )
 
-    return findings
+    if not path.is_dir():
+        raise ValueError(
+            f"Path is not a directory: {directory}"
+        )
+
+    return path.resolve()
 
 
-def scan_file(path):
-    findings = []
-
-    findings.extend(check_permissions(path))
-
-    extension = os.path.splitext(path)[1].lower()
-
-    if extension not in TEXT_EXTENSIONS:
-        return findings
+def is_excluded(path: Path, root: Path) -> bool:
+    """Return True when a path is inside an excluded directory."""
 
     try:
-        if os.path.getsize(path) > 2_000_000:
-            return findings
+        relative = path.relative_to(root)
+    except ValueError:
+        return True
 
-        with open(
-            path,
-            "r",
+    return any(
+        part in DEFAULT_EXCLUDED_DIRS
+        for part in relative.parts
+    )
+
+
+def is_text_file(path: Path) -> bool:
+    """Determine whether a file is suitable for text scanning."""
+
+    return (
+        path.suffix.lower() in TEXT_EXTENSIONS
+        or path.name.startswith(".env")
+    )
+
+
+def safe_read_text(
+    path: Path,
+    max_bytes: int,
+) -> str | None:
+    """
+    Read a text file safely.
+
+    Returns None when the file cannot reasonably be read.
+    """
+
+    try:
+        if path.stat().st_size > max_bytes:
+            return None
+
+        return path.read_text(
             encoding="utf-8",
-            errors="ignore"
-        ) as file:
-            content = file.read()
+            errors="ignore",
+        )
 
     except (OSError, UnicodeError):
-        return findings
-
-    for label, pattern in SECRET_PATTERNS:
-
-        if pattern.search(content):
-
-            findings.append({
-                "path": path,
-                "type": label,
-                "risk": "High",
-                "finding": (
-                    f"A pattern resembling {label.lower()} "
-                    "was found. This may be a false positive."
-                ),
-                "action": (
-                    "Remove exposed secrets, rotate affected credentials, "
-                    "and store secrets in an appropriate secret-management system."
-                )
-            })
-
-    return findings
+        return None
 
 
-def scan_directory(directory, max_files=1000):
+def line_number(text: str, position: int) -> int:
+    """Return the 1-based line number for a text position."""
 
-    if not os.path.isdir(directory):
-        raise ValueError("Directory does not exist.")
+    return text.count("\n", 0, position) + 1
 
-    findings = []
-    checked = 0
 
-    excluded = {
-        ".git",
-        "__pycache__",
-        "node_modules",
-        ".venv",
-        "venv",
-    }
+def create_finding(
+    path: Path,
+    root: Path,
+    finding_type: str,
+    line: int | None = None,
+    confidence: str = "Medium",
+) -> dict[str, Any]:
+    """Create a safe finding without including secret values."""
 
-    for root, directories, files in os.walk(directory):
-
-        directories[:] = [
-            directory
-            for directory in directories
-            if directory not in excluded
-        ]
-
-        for filename in files:
-
-            if checked >= max_files:
-                return findings
-
-            path = os.path.join(root, filename)
-
-            checked += 1
-
-            findings.extend(scan_file(path))
-
-    return findings
+   
