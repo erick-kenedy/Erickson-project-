@@ -9,9 +9,19 @@ from __future__ import annotations
 import csv
 import io
 import json
+from collections import Counter
 from datetime import datetime, timezone
 from html import escape
 from typing import Any
+
+
+RISK_ORDER = {
+    "Critical": 0,
+    "High": 1,
+    "Medium": 2,
+    "Low": 3,
+    "Info": 4,
+}
 
 
 def report_timestamp() -> str:
@@ -40,23 +50,76 @@ def normalize_finding(
     """Convert a finding into a consistent report structure."""
 
     return {
-        "risk": finding.get("risk", "Info"),
-        "type": (
+        "risk": str(
+            finding.get("risk", "Info")
+        ),
+        "type": str(
             finding.get("type")
             or finding.get("service")
             or "Security Finding"
         ),
-        "target": finding.get("target", ""),
-        "port": finding.get("port", ""),
-        "service": finding.get("service", ""),
-        "path": finding.get("path", ""),
-        "location": finding.get("location", ""),
-        "finding": finding.get("finding", ""),
-        "confidence": finding.get(
-            "confidence",
-            "Medium",
+        "target": str(
+            finding.get("target", "")
         ),
-        "action": finding.get("action", ""),
+        "port": finding.get(
+            "port",
+            "",
+        ),
+        "service": str(
+            finding.get("service", "")
+        ),
+        "path": str(
+            finding.get("path", "")
+        ),
+        "location": str(
+            finding.get("location", "")
+        ),
+        "finding": str(
+            finding.get("finding", "")
+        ),
+        "confidence": str(
+            finding.get(
+                "confidence",
+                "Medium",
+            )
+        ),
+        "action": str(
+            finding.get("action", "")
+        ),
+    }
+
+
+def sort_findings(
+    findings: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Sort findings from highest to lowest risk."""
+
+    return sorted(
+        findings,
+        key=lambda finding: RISK_ORDER.get(
+            str(finding.get("risk", "Info")),
+            99,
+        ),
+    )
+
+
+def build_summary(
+    findings: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Build a summary of finding severity levels."""
+
+    counts = Counter(
+        str(finding.get("risk", "Info"))
+        for finding in findings
+    )
+
+    return {
+        "total": len(findings),
+        "critical": counts.get("Critical", 0),
+        "high": counts.get("High", 0),
+        "medium": counts.get("Medium", 0),
+        "low": counts.get("Low", 0),
+        "info": counts.get("Info", 0),
     }
 
 
@@ -88,7 +151,7 @@ def generate_csv(
 
     writer.writeheader()
 
-    for finding in findings:
+    for finding in sort_findings(findings):
         writer.writerow(
             normalize_finding(finding)
         )
@@ -99,16 +162,18 @@ def generate_csv(
 def generate_json(
     findings: list[dict[str, Any]],
 ) -> str:
-    """Generate a JSON report."""
+    """Generate a structured JSON report."""
+
+    summary = build_summary(findings)
 
     report = {
         "product": "NetGuard",
         "report_type": "Security Assessment",
         "generated_at": report_timestamp(),
-        "finding_count": len(findings),
+        "summary": summary,
         "findings": [
             normalize_finding(finding)
-            for finding in findings
+            for finding in sort_findings(findings)
         ],
     }
 
@@ -125,10 +190,19 @@ def generate_text(
 ) -> str:
     """Generate a readable plain-text report."""
 
+    summary = build_summary(findings)
+
     lines = [
         report_header(title),
         "",
-        f"Total findings: {len(findings)}",
+        "SUMMARY",
+        "-------",
+        f"Total findings: {summary['total']}",
+        f"Critical: {summary['critical']}",
+        f"High: {summary['high']}",
+        f"Medium: {summary['medium']}",
+        f"Low: {summary['low']}",
+        f"Info: {summary['info']}",
         "",
         "FINDINGS",
         "--------",
@@ -140,7 +214,7 @@ def generate_text(
         )
 
     for index, finding in enumerate(
-        findings,
+        sort_findings(findings),
         start=1,
     ):
         normalized = normalize_finding(
@@ -160,7 +234,10 @@ def generate_text(
                 f"Location: {normalized['location']}",
                 f"Confidence: {normalized['confidence']}",
                 f"Finding: {normalized['finding']}",
-                f"Recommended action: {normalized['action']}",
+                (
+                    "Recommended action: "
+                    f"{normalized['action']}"
+                ),
             ]
         )
 
@@ -173,9 +250,11 @@ def generate_html(
 ) -> str:
     """Generate a standalone HTML report."""
 
+    summary = build_summary(findings)
+
     rows = []
 
-    for finding in findings:
+    for finding in sort_findings(findings):
         item = normalize_finding(finding)
 
         rows.append(
@@ -229,6 +308,20 @@ h1 {{
     margin-bottom: 25px;
 }}
 
+.summary {{
+    display: grid;
+    grid-template-columns:
+        repeat(auto-fit, minmax(120px, 1fr));
+    gap: 10px;
+    margin-bottom: 25px;
+}}
+
+.summary-card {{
+    border: 1px solid #ccc;
+    padding: 12px;
+    border-radius: 6px;
+}}
+
 table {{
     width: 100%;
     border-collapse: collapse;
@@ -265,9 +358,40 @@ th {{
 <div class="meta">
     <strong>Generated:</strong>
     {escape(report_timestamp())}
-    <br>
-    <strong>Total findings:</strong>
-    {len(findings)}
+</div>
+
+<div class="summary">
+
+<div class="summary-card">
+<strong>Total</strong><br>
+{summary["total"]}
+</div>
+
+<div class="summary-card">
+<strong>Critical</strong><br>
+{summary["critical"]}
+</div>
+
+<div class="summary-card">
+<strong>High</strong><br>
+{summary["high"]}
+</div>
+
+<div class="summary-card">
+<strong>Medium</strong><br>
+{summary["medium"]}
+</div>
+
+<div class="summary-card">
+<strong>Low</strong><br>
+{summary["low"]}
+</div>
+
+<div class="summary-card">
+<strong>Info</strong><br>
+{summary["info"]}
+</div>
+
 </div>
 
 <table>
