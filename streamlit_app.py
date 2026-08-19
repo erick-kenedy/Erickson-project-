@@ -5,6 +5,7 @@ from scanner.network import scan_host
 from scanner.scan import scan_directory
 from scanner.risk import score
 from scanner.report import generate_csv, report_header
+from services.ai_service import ask_ai
 
 
 # ---------------------------------------------------------
@@ -28,6 +29,7 @@ DEFAULT_STATE = {
     "data_findings": [],
     "network_target": "",
     "data_directory": "",
+    "ai_result": "",
 }
 
 for key, value in DEFAULT_STATE.items():
@@ -55,10 +57,10 @@ def parse_ports(ports_text: str) -> list[int]:
 
         try:
             port = int(item)
-        except ValueError:
+        except ValueError as exc:
             raise ValueError(
                 f"Invalid port: '{item}'. Ports must be numbers."
-            )
+            ) from exc
 
         if not 1 <= port <= 65535:
             raise ValueError(
@@ -70,7 +72,6 @@ def parse_ports(ports_text: str) -> list[int]:
     if not ports:
         raise ValueError("Enter at least one valid TCP port.")
 
-    # Remove duplicates while preserving order.
     return list(dict.fromkeys(ports))
 
 
@@ -142,12 +143,14 @@ def render_metrics(findings: list[dict]) -> None:
     total, level = score(findings)
 
     critical = sum(
-        1 for finding in findings
+        1
+        for finding in findings
         if finding.get("risk") == "Critical"
     )
 
     high = sum(
-        1 for finding in findings
+        1
+        for finding in findings
         if finding.get("risk") == "High"
     )
 
@@ -202,7 +205,7 @@ def render_reports(findings: list[dict]) -> None:
     if not findings:
         return
 
-    st.subheader("Reports")
+    st.subheader("📄 Reports")
 
     csv_data = generate_csv(findings)
 
@@ -243,6 +246,39 @@ def render_reports(findings: list[dict]) -> None:
         )
 
 
+def render_ai_assistant(findings: list[dict]) -> None:
+    """Render the AI security assistant."""
+
+    if not findings:
+        return
+
+    st.divider()
+
+    st.subheader("🤖 AI Security Assistant")
+
+    st.write(
+        "Get a simple defensive explanation of the "
+        "current security findings and recommended "
+        "priorities."
+    )
+
+    if st.button(
+        "🤖 Explain Findings with AI",
+        type="primary",
+        use_container_width=True,
+    ):
+        with st.spinner(
+            "AI is analyzing the security findings..."
+        ):
+            st.session_state.ai_result = ask_ai(
+                findings
+            )
+
+    if st.session_state.ai_result:
+        st.markdown("### 🧠 AI Assessment")
+        st.info(st.session_state.ai_result)
+
+
 # ---------------------------------------------------------
 # HEADER
 # ---------------------------------------------------------
@@ -260,7 +296,8 @@ st.markdown(
 
 st.warning(
     "⚠️ Authorization required: only assess systems, "
-    "networks, and data that you own or have permission to assess."
+    "networks, and data that you own or have permission "
+    "to assess."
 )
 
 
@@ -306,13 +343,14 @@ with st.sidebar:
         st.session_state.data_findings = []
         st.session_state.network_target = ""
         st.session_state.data_directory = ""
+        st.session_state.ai_result = ""
 
         st.rerun()
 
     st.divider()
 
     st.caption(
-        "NetGuard v1.1\n"
+        "NetGuard v1.2\n"
         "Defensive security assessment tool"
     )
 
@@ -347,8 +385,10 @@ with network_tab:
 
         target = st.text_input(
             "Target hostname or IP address",
-            value=st.session_state.network_target
-            or "127.0.0.1",
+            value=(
+                st.session_state.network_target
+                or "127.0.0.1"
+            ),
             help=(
                 "Use a hostname or IP address belonging "
                 "to a system you are authorized to assess."
@@ -392,6 +432,8 @@ with network_tab:
                 target.strip()
             )
 
+            st.session_state.ai_result = ""
+
             with st.spinner(
                 "Assessing selected TCP ports..."
             ):
@@ -425,6 +467,8 @@ with network_tab:
 
                 for finding in findings:
                     render_finding(finding)
+
+                render_ai_assistant(findings)
 
         except ValueError as error:
             st.error(str(error))
@@ -492,6 +536,8 @@ with data_tab:
                 directory.strip()
             )
 
+            st.session_state.ai_result = ""
+
             with st.spinner(
                 "Checking authorized files..."
             ):
@@ -523,6 +569,8 @@ with data_tab:
 
                 for finding in findings:
                     render_finding(finding)
+
+                render_ai_assistant(findings)
 
         except ValueError as error:
             st.error(str(error))
@@ -563,6 +611,7 @@ with dashboard_tab:
             3. Start the assessment.
             4. Return here to review the combined results.
             """
+
         )
 
     else:
@@ -572,10 +621,10 @@ with dashboard_tab:
         st.divider()
 
         # -------------------------------------------------
-        # Risk summary
+        # RISK SUMMARY
         # -------------------------------------------------
 
-        st.subheader("Risk Summary")
+        st.subheader("📈 Risk Summary")
 
         risk_counts = (
             pd.Series(
@@ -595,10 +644,10 @@ with dashboard_tab:
             )
 
         # -------------------------------------------------
-        # Findings table
+        # FINDINGS TABLE
         # -------------------------------------------------
 
-        st.subheader("All Findings")
+        st.subheader("🔎 All Findings")
 
         dataframe = build_dataframe(
             all_findings
@@ -611,7 +660,13 @@ with dashboard_tab:
         )
 
         # -------------------------------------------------
-        # Reports
+        # AI ASSISTANT
+        # -------------------------------------------------
+
+        render_ai_assistant(all_findings)
+
+        # -------------------------------------------------
+        # REPORTS
         # -------------------------------------------------
 
         st.divider()
@@ -626,7 +681,7 @@ with dashboard_tab:
 st.divider()
 
 st.caption(
-    "NetGuard v1.1 — Defensive security assessment tool. "
+    "NetGuard v1.2 — Defensive security assessment tool. "
     "Use only on systems, networks, and data you are "
     "authorized to assess."
 )
