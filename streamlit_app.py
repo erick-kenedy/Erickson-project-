@@ -4,7 +4,12 @@ import pandas as pd
 from scanner.network import scan_host
 from scanner.scan import scan_directory
 from scanner.risk import score
-from scanner.report import generate_csv, report_header
+from scanner.report import (
+    generate_csv,
+    generate_json,
+    generate_html,
+    generate_text,
+)
 from services.ai_service import ask_ai
 
 
@@ -102,6 +107,9 @@ def finding_location(finding: dict) -> str:
 
     if finding.get("port") is not None:
         return f"Port {finding['port']}"
+
+    if finding.get("target"):
+        return str(finding["target"])
 
     return "Unknown"
 
@@ -205,25 +213,12 @@ def render_reports(findings: list[dict]) -> None:
     if not findings:
         return
 
-    st.subheader("📄 Reports")
+    st.subheader("📄 Security Reports")
 
     csv_data = generate_csv(findings)
-
-    text_report = (
-        report_header("NetGuard Security Assessment")
-        + "\n"
-        + "\n".join(
-            [
-                (
-                    f"{finding.get('risk', 'Info')} | "
-                    f"{finding_type(finding)} | "
-                    f"{finding.get('finding', '')} | "
-                    f"Action: {finding.get('action', '')}"
-                )
-                for finding in findings
-            ]
-        )
-    )
+    json_data = generate_json(findings)
+    text_data = generate_text(findings)
+    html_data = generate_html(findings)
 
     col1, col2 = st.columns(2)
 
@@ -236,12 +231,28 @@ def render_reports(findings: list[dict]) -> None:
             use_container_width=True,
         )
 
+        st.download_button(
+            label="⬇️ Download JSON",
+            data=json_data,
+            file_name="netguard-security-report.json",
+            mime="application/json",
+            use_container_width=True,
+        )
+
     with col2:
         st.download_button(
-            label="⬇️ Download Text Report",
-            data=text_report,
+            label="⬇️ Download Text",
+            data=text_data,
             file_name="netguard-security-report.txt",
             mime="text/plain",
+            use_container_width=True,
+        )
+
+        st.download_button(
+            label="⬇️ Download HTML",
+            data=html_data,
+            file_name="netguard-security-report.html",
+            mime="text/html",
             use_container_width=True,
         )
 
@@ -611,7 +622,6 @@ with dashboard_tab:
             3. Start the assessment.
             4. Return here to review the combined results.
             """
-
         )
 
     else:
